@@ -1,60 +1,82 @@
-# LLaMA (Language Model Backbone)
+# LFM (Liquid Foundation Model) — Audio
 
-This project uses **LLaMA** (Large Language Model Meta AI) as the language model backbone in multiple components. The architecture follows the standard LLaMA design with grouped-query attention, RoPE (Rotary Position Embeddings), SwiGLU activation, and RMSNorm.
-
-## Usage in This Project
-
-### 1. GLM-ASR Decoder (Speech-to-Text)
-
-The GLM-ASR speech recognition model uses a **LLaMA decoder** (28 layers) to generate text transcripts from audio embeddings. Audio features extracted by a Whisper encoder are projected into LLaMA's embedding space via an MLP adapter.
-
-```
-Audio → Whisper Encoder → MLP Adapter → LLaMA Decoder → Text
-```
-
-| Component | Value |
-|---|---|
-| Layers | 28 |
-| Hidden size | 2048 |
-| Attention heads | 16 |
-| KV heads | 4 |
-| Vocab size | 59,264 |
-| Max context | 65,536 |
-
-### 2. LLaMA TTS Model (Text-to-Speech)
-
-The `mlx_audio` TTS library includes a LLaMA-based text-to-speech model that combines a **LLaMA language model** (from `mlx_lm`) with a **SNAC audio codec** for neural audio compression.
-
-```
-Text → LLaMA LM → Audio Tokens → SNAC Decoder → Waveform
-```
-
-The LLaMA model generates hierarchical audio tokens which are decoded by the multi-scale SNAC codec into a 24 kHz waveform.
+This project uses **LFM2-Audio** and **LFM2.5-Audio** by [Liquid AI](https://www.liquid.ai/), an end-to-end audio foundation model for speech-to-speech, ASR, and TTS tasks. At only 1.5B parameters, it delivers real-time conversational quality on Apple Silicon via MLX.
 
 ## Architecture
 
-- **Grouped-Query Attention** — 16 heads with 4 KV heads for efficient inference
-- **RoPE** — Rotary Position Embeddings with configurable theta (default 10,000)
-- **SwiGLU MLP** — Gated activation with gate/up/down projections
-- **RMSNorm** — Pre-normalization with learnable scale
-- **Tied/Untied Embeddings** — Configurable weight tying
+LFM2-Audio uses a hybrid architecture with three main components:
+
+1. **FastConformer Audio Encoder** (115M params) — Encodes raw audio waveforms into continuous embeddings by chunking audio into ~80ms segments and projecting into the LFM backbone's embedding space. Tokenizer-free approach avoids artifacts from discrete audio tokenization.
+
+2. **LFM2 Backbone** (1.2B params) — A hybrid convolution + attention language model that processes interleaved text and audio tokens. Built on Liquid AI's dynamical systems architecture (not traditional transformers), designed for efficient inference on edge devices.
+
+3. **Audio Detokenizer** — An RQ-Transformer that generates discrete audio tokens (8 codebooks, Mimi-compatible) from the backbone's output, decoded back into waveforms.
+
+```
+Audio ──→ FastConformer Encoder ──→ LFM2 Backbone ──→ RQ-Transformer ──→ Audio/Text
+Text ──────────────────────────→         │
+                                         └──→ Text tokens (ASR/chat)
+```
+
+## Generation Modes
+
+| Mode | Description | Use Cases |
+|---|---|---|
+| **Interleaved** | Fixed interleaved pattern of text + audio tokens. Minimizes time-to-first-audio. | Real-time speech-to-speech chat |
+| **Sequential** | Model decides when to switch modalities via special tokens. | ASR, TTS, transcription |
+
+## Model Details
+
+| Property | Value |
+|---|---|
+| Parameters (total) | ~1.5B (1.2B backbone + 115M encoder) |
+| Audio encoder | FastConformer (canary-180m-flash based) |
+| Backbone | Hybrid conv + attention (LFM2/LFM2.5) |
+| Audio codec | 8 codebooks, Mimi-compatible |
+| Context length | 32,768 tokens |
+| Text vocab | 65,536 |
+| Audio vocab | 2,049 × 8 codebooks |
+| Precision | bfloat16 |
+| Sample rate | 16 kHz |
+| License | LFM Open License v1.0 |
 
 ## Usage
 
-```bash
-# Via mlx_audio TTS
-python -m mlx_audio.tts.generate \
-  --model path/to/llama-tts-model \
-  --text "Hello, this is a test."
+### Via `liquid-audio` (recommended)
 
-# Via mlx_audio STT (GLM-ASR with LLaMA decoder)
-python -m mlx_audio.stt.generate \
-  --model path/to/glm-asr-model \
-  --audio input.wav
+```bash
+pip install liquid-audio
+
+# Gradio demo
+liquid-audio-demo
+
+# Python
+from liquid_audio import LFM2AudioModel
+
+model = LFM2AudioModel.from_pretrained("LiquidAI/LFM2.5-Audio-1.5B")
+result = model.generate("input.wav", mode="interleaved")
 ```
+
+### Via `mlx-lm` (text-only)
+
+```python
+from mlx_lm import load, generate
+
+model, tokenizer = load("mlx-community/LFM2-1.2B-8bit")
+response = generate(model, tokenizer, prompt="Hello")
+```
+
+## Variants
+
+| Model | Description |
+|---|---|
+| LFM2-Audio-1.5B | Original end-to-end audio model |
+| LFM2.5-Audio-1.5B | Updated with faster LFM-based detokenizer, better ASR/TTS |
+| LFM2.5-Audio-1.5B-JP | Japanese speech-to-speech variant |
 
 ## References
 
-- [LLaMA Paper](https://arxiv.org/abs/2302.13971) — Original architecture
-- [mlx-lm](https://github.com/ml-explore/mlx-lm) — MLX implementation of LLaMA
-- [SNAC Codec](https://github.com/hubertsiuzdak/snac) — Multi-scale neural audio codec
+- [LFM2 Technical Report](https://arxiv.org/abs/2511.23404)
+- [Liquid AI](https://www.liquid.ai/) — Official site
+- [Liquid4All/liquid-audio](https://github.com/Liquid4All/liquid-audio) — GitHub repository
+- [Hugging Face Collection](https://huggingface.co/LiquidAI)
